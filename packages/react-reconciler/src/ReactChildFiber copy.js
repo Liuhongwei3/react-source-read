@@ -59,6 +59,7 @@ import { getIsHydrating } from './ReactFiberHydrationContext';
 import { pushTreeFork } from './ReactFiberTreeContext';
 import { createThenableState, trackUsedThenable } from './ReactFiberThenable';
 import { readContextDuringReconciliation } from './ReactFiberNewContext';
+import React from 'react';
 
 // This tracks the thenables that are unwrapped during reconcilation.
 let thenableState: ThenableState | null = null;

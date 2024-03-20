@@ -17,11 +17,11 @@ import type {
   Awaited,
   ReactDebugInfo,
 } from 'shared/ReactTypes';
-import type {WorkTag} from './ReactWorkTags';
-import type {TypeOfMode} from './ReactTypeOfMode';
-import type {Flags} from './ReactFiberFlags';
-import type {Lane, Lanes, LaneMap} from './ReactFiberLane';
-import type {RootTag} from './ReactRootTags';
+import type { WorkTag } from './ReactWorkTags';
+import type { TypeOfMode } from './ReactTypeOfMode';
+import type { Flags } from './ReactFiberFlags';
+import type { Lane, Lanes, LaneMap } from './ReactFiberLane';
+import type { RootTag } from './ReactRootTags';
 import type {
   Container,
   TimeoutHandle,
@@ -29,12 +29,12 @@ import type {
   SuspenseInstance,
   TransitionStatus,
 } from './ReactFiberConfig';
-import type {Cache} from './ReactFiberCacheComponent';
+import type { Cache } from './ReactFiberCacheComponent';
 import type {
   TracingMarkerInstance,
   Transition,
 } from './ReactFiberTracingMarkerComponent';
-import type {ConcurrentUpdate} from './ReactFiberConcurrentUpdates';
+import type { ConcurrentUpdate } from './ReactFiberConcurrentUpdates';
 
 // Unwind Circular: moved from ReactFiberHooks.old
 export type HookType =
@@ -89,14 +89,15 @@ export type Fiber = {
   // alternate versions of the tree. We put this on a single object for now to
   // minimize the number of objects created during the initial render.
 
-  // Tag identifying the type of fiber.
+  // Tag identifying the type of fiber. 比如 function/class/fragment/ForwardRef/...
   tag: WorkTag,
 
-  // Unique identifier of this child.
+  // Unique identifier of this child. comp key 唯一值
   key: null | string,
 
   // The value of element.type which is used to preserve the identity during
   // reconciliation of this child.
+  // 节点类型：div/span/...
   elementType: any,
 
   // The resolved function/class/ associated with this fiber.
@@ -115,22 +116,26 @@ export type Fiber = {
   // This is effectively the parent, but there can be multiple parents (two)
   // so this is only the parent of the thing we're currently processing.
   // It is conceptually the same as the return address of a stack frame.
+  // 其父节点
   return: Fiber | null,
 
   // Singly Linked List Tree Structure.
+  // 其子节点
   child: Fiber | null,
+  // 其兄弟节点
   sibling: Fiber | null,
   index: number,
 
   // The ref last used to attach this node.
   // I'll avoid adding an owner field for prod and model that as functions.
   ref:
-    | null
-    | (((handle: mixed) => void) & {_stringRef: ?string, ...})
-    | RefObject,
+  | null
+  | (((handle: mixed) => void) & { _stringRef: ?string, ... })
+  | RefObject,
 
   refCleanup: null | (() => void),
 
+  // props && state
   // Input is the data coming into process this fiber. Arguments. Props.
   pendingProps: any, // This type will be more specific once we overload the tag.
   memoizedProps: any, // The props used to create the output.
@@ -150,19 +155,41 @@ export type Fiber = {
   // parent. Additional flags can be set at creation time, but after that the
   // value should remain unchanged throughout the fiber's lifetime, particularly
   // before its child fibers are created.
+  // 描述 Fiber 工作模式的标志（例如 Concurrent 模式、StrictLegacyMode 模式等）
   mode: TypeOfMode,
 
   // Effect
+  // 存储副作用的标记，例如DOM更新、生命周期方法调用等。React会积累这些副作用，然后在 commit 阶段一次性执行，从而提高效率
+  //   假设有两种标识符：
+  // Placement (表示新插入的子节点)：0b001
+  // Update (表示子节点已更新)：0b010
+
+  // A
+  // ├─ B (Update)
+  // │   └─ D (Placement)
+  // └─ C
+  //    └─ E
+
+  // 这个例子里，计算逻辑是这样：
+  // 1、检查到A的flags没有副作用，直接复用，但subtreeFlags有副作用，那么递归检查B和C
+  // 2、检查到B的flags有复用，更新B，subtreeFlags也有副作用，则继续检查D
+  // 3、检查到C的flags没有副作用，subtreeFlags也没有副作用，那么直接复用C和E
+  // 如果节点更多，则以此类推。
+  // 这样的计算方式可以减少递归那些没有副作用的子树或节点，所以比以前的版本全部递归的算法要高效
   flags: Flags,
   subtreeFlags: Flags,
+  // 要删除的子节点
   deletions: Array<Fiber> | null,
 
+  // lane 模型相关（主要是调度时）
   lanes: Lanes,
   childLanes: Lanes,
 
   // This is a pooled version of a Fiber. Every fiber that gets updated will
   // eventually have a pair. There are cases when we can clean up pairs to save
   // memory if we need to.
+  // current tree <--> [work in progress] tree 互相指向
+  // 更新时只需要将 fiberRoot 从 current tree 切换到 WIP tree，此时 WIP tree --> current tree
   alternate: Fiber | null,
 
   // Time spent rendering this Fiber and its descendants for the current update.
@@ -261,7 +288,7 @@ type BaseFiberRootProperties = {
 
   onRecoverableError: (
     error: mixed,
-    errorInfo: {digest?: ?string, componentStack?: ?string},
+    errorInfo: { digest?: ?string, componentStack?: ?string },
   ) => void,
 
   formState: ReactFormState<any, any> | null,
@@ -291,7 +318,7 @@ export type TransitionTracingCallbacks = {
     transitionName: string,
     startTime: number,
     currentTime: number,
-    pending: Array<{name: null | string}>,
+    pending: Array<{ name: null | string }>,
   ) => void,
   onTransitionIncomplete?: (
     transitionName: string,
@@ -312,7 +339,7 @@ export type TransitionTracingCallbacks = {
     marker: string,
     startTime: number,
     currentTime: number,
-    pending: Array<{name: null | string}>,
+    pending: Array<{ name: null | string }>,
   ) => void,
   onMarkerIncomplete?: (
     transitionName: string,
@@ -361,62 +388,62 @@ type Dispatch<A> = A => void;
 
 export type Dispatcher = {
   use: <T>(Usable<T>) => T,
-  readContext<T>(context: ReactContext<T>): T,
-  useState<S>(initialState: (() => S) | S): [S, Dispatch<BasicStateAction<S>>],
-  useReducer<S, I, A>(
-    reducer: (S, A) => S,
-    initialArg: I,
-    init?: (I) => S,
-  ): [S, Dispatch<A>],
-  useContext<T>(context: ReactContext<T>): T,
-  useRef<T>(initialValue: T): {current: T},
-  useEffect(
-    create: () => (() => void) | void,
-    deps: Array<mixed> | void | null,
+    readContext < T > (context: ReactContext < T >): T,
+      useState < S > (initialState: (() => S) | S): [S, Dispatch < BasicStateAction < S >>],
+        useReducer < S, I, A > (
+          reducer: (S, A) => S,
+            initialArg: I,
+              init ?: (I) => S,
+  ): [S, Dispatch < A >],
+  useContext < T > (context: ReactContext < T >): T,
+    useRef < T > (initialValue: T): { current: T },
+useEffect(
+  create: () => (() => void) | void,
+  deps: Array < mixed > | void | null,
+): void,
+  useEffectEvent ?: <Args, F: (...Array<Args>) => mixed > (callback: F) => F,
+    useInsertionEffect(
+      create: () => (() => void) | void,
+      deps: Array < mixed > | void | null,
+    ): void,
+      useLayoutEffect(
+        create: () => (() => void) | void,
+        deps: Array < mixed > | void | null,
+      ): void,
+        useCallback < T > (callback: T, deps: Array < mixed > | void | null): T,
+          useMemo < T > (nextCreate: () => T, deps: Array < mixed > | void | null): T,
+            useImperativeHandle < T > (
+              ref: { current: T | null } | ((inst: T | null) => mixed) | null | void,
+                create: () => T,
+                  deps: Array < mixed > | void | null,
   ): void,
-  useEffectEvent?: <Args, F: (...Array<Args>) => mixed>(callback: F) => F,
-  useInsertionEffect(
-    create: () => (() => void) | void,
-    deps: Array<mixed> | void | null,
-  ): void,
-  useLayoutEffect(
-    create: () => (() => void) | void,
-    deps: Array<mixed> | void | null,
-  ): void,
-  useCallback<T>(callback: T, deps: Array<mixed> | void | null): T,
-  useMemo<T>(nextCreate: () => T, deps: Array<mixed> | void | null): T,
-  useImperativeHandle<T>(
-    ref: {current: T | null} | ((inst: T | null) => mixed) | null | void,
-    create: () => T,
-    deps: Array<mixed> | void | null,
-  ): void,
-  useDebugValue<T>(value: T, formatterFn: ?(value: T) => mixed): void,
-  useDeferredValue<T>(value: T, initialValue?: T): T,
-  useTransition(): [
-    boolean,
-    (callback: () => void, options?: StartTransitionOptions) => void,
-  ],
-  useSyncExternalStore<T>(
-    subscribe: (() => void) => () => void,
-    getSnapshot: () => T,
-    getServerSnapshot?: () => T,
+  useDebugValue < T > (value: T, formatterFn: ?(value: T) => mixed): void,
+    useDeferredValue < T > (value: T, initialValue ?: T): T,
+      useTransition(): [
+        boolean,
+        (callback: () => void, options?: StartTransitionOptions) => void,
+      ],
+        useSyncExternalStore < T > (
+          subscribe: (() => void) => () => void,
+            getSnapshot: () => T,
+              getServerSnapshot ?: () => T,
   ): T,
   useId(): string,
-  useCacheRefresh?: () => <T>(?() => T, ?T) => void,
+    useCacheRefresh ?: () => <T>(?() => T, ?T) => void,
   useMemoCache?: (size: number) => Array<any>,
   useHostTransitionStatus?: () => TransitionStatus,
-  useOptimistic?: <S, A>(
-    passthrough: S,
+        useOptimistic?: <S, A>(
+        passthrough: S,
     reducer: ?(S, A) => S,
   ) => [S, (A) => void],
-  useFormState?: <S, P>(
-    action: (Awaited<S>, P) => S,
-    initialState: Awaited<S>,
-    permalink?: string,
+        useFormState?: <S, P>(
+        action: (Awaited<S>, P) => S,
+          initialState: Awaited<S>,
+            permalink?: string,
   ) => [Awaited<S>, (P) => void, boolean],
 };
 
-export type CacheDispatcher = {
-  getCacheSignal: () => AbortSignal,
-  getCacheForType: <T>(resourceType: () => T) => T,
+              export type CacheDispatcher = {
+                getCacheSignal: () => AbortSignal,
+              getCacheForType: <T>(resourceType: () => T) => T,
 };

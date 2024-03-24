@@ -438,6 +438,115 @@ export function higherPriorityLane(a: Lane, b: Lane): Lane {
 
 ## react-diff
 
+### 流程
+
+![](./excalDraw/react-diff-type-process.png)
+
+### 文本
+
+ - 如果当前 fiber 也为文本类型的节点时，`deleteRemainingChildren` 对第一个旧子 fiber 的所有兄弟 fiber 添加 `Deletion` 副作用标记，然后通过 `useFiber` 基于当前 fiber 和 `textContent` 创建新的 fiber 复用，同时将其 `return` 指向父 fiber
+ - 否则 `deleteRemainingChildren` 对所有旧的子 fiber 添加 `Deletion` 副作用标记，然后 `createFiberFromText` 创建新的文本类型 fiber 节点，并将其 `return` 指向父 fiber
+
+```js
+function reconcileSingleTextNode(
+    returnFiber: Fiber,
+    currentFirstChild: Fiber | null,
+    textContent: string,
+    lanes: Lanes,
+  ): Fiber {
+    // There's no need to check for keys on text nodes since we don't have a
+    // way to define them.
+    if (currentFirstChild !== null && currentFirstChild.tag === HostText) {
+      // We already have an existing node so let's just update it and delete
+      // the rest.
+      deleteRemainingChildren(returnFiber, currentFirstChild.sibling);
+      const existing = useFiber(currentFirstChild, textContent);
+      existing.return = returnFiber;
+      return existing;
+    }
+    // The existing first child is not a text node so we need to create one
+    // and delete the existing ones.
+    deleteRemainingChildren(returnFiber, currentFirstChild);
+    const created = createFiberFromText(textContent, returnFiber.mode, lanes);
+    created.return = returnFiber;
+    return created;
+  }
+```
+
+### 单节点
+
+`reconcileSingleElement` 函数中，会遍历父 fiber 下所有的旧的子 fiber，寻找与新生成的 ReactElement 内容的 key 和 type 都相同的子 fiber。每次遍历对比的过程中：
+
+ - 若当前旧的子 fiber 与新内容 key 或 type 不一致，对当前旧的子 fiber 添加 `Deletion` 副作用标记（用于 dom 更新时删除），继续对比下一个旧子 fiber
+ - 若当前旧的子 fiber 与新内容 key 或 type 一致，则判断为可复用，通过 `deleteRemainingChildren` 对该子 fiber 后面所有的兄弟 fiber 添加 `Deletion` 副作用标记，然后通过 useFiber 基于该子 fiber 和新内容的 props 生成新的 fiber 进行复用，结束遍历。
+
+如果遍历完仍没找到复用节点，此时父 fiber 下的所有旧的子 fiber 都已经添加了 `Deletion` 副作用标记，通过 `createFiberFromElement` 基于新内容创建新的 fiber 并将其 `return` 指向父 fiber。
+
+```js
+/**
+   * 
+   * @param {*} returnFiber 父级 fiber
+   * @param {*} currentFirstChild 当前 fiber 的第一个子节点，当前 fiber 即指 currentFiber，即旧的
+   * @param {*} element 新的子节点
+   * @param {*} lanes 
+   * @returns 新的第一个子节点
+   */
+  function reconcileSingleElement(
+    returnFiber: Fiber,
+    currentFirstChild: Fiber | null,
+    element: ReactElement,
+    lanes: Lanes,
+    debugInfo: ReactDebugInfo | null,
+  ): Fiber {
+    const key = element.key;
+    let child = currentFirstChild;
+    // 遍历处理：在旧节点中寻找可以复用的
+    while (child !== null) {
+      // TODO: If key === null and child.key === null, then this only applies to
+      // the first item in the list.
+      if (child.key === key) {
+        const elementType = element.type;
+        // 当 key、type 都相同时
+        if (child.elementType === elementType) {// 比如都是 div div
+          // 删掉 child 的相邻节点，不包括 child，因为此时满足复用条件
+          deleteRemainingChildren(returnFiber, child.sibling);
+          // 开始复用并返回
+          const existing = useFiber(child, element.props);
+          coerceRef(returnFiber, child, existing, element);
+          // return 指向父节点
+          existing.return = returnFiber;
+
+          return existing;
+        }
+        // 当 key 相同、type 不相同时会直接删除剩余的子节点，包括当前的子节点
+        // 如果 
+        // Didn't match.
+        deleteRemainingChildren(returnFiber, child);
+        break;
+      } else {
+        // key 不相同时则直接不复用，删除节点
+        deleteChild(returnFiber, child);
+      }
+      // 将 child 指向下一个相邻节点
+      child = child.sibling;
+    }
+
+    // 遍历结束仍没有找到复用的节点，则删除所有的旧节点（while 循环已完成标记）并创建新节点、更新 return
+    const created = createFiberFromElement(element, returnFiber.mode, lanes);
+    coerceRef(returnFiber, currentFirstChild, created, element);
+    created.return = returnFiber;
+    return created;
+  }
+```
+
+### 多节点
+
+```js
+
+```
+
+## 所有核心源码
+
 ```js
 // This wrapper function exists because I expect to clone the code in each path
 // to be able to optimize each path individually by branching early. This needs
@@ -905,7 +1014,7 @@ function createChildReconciler(
   ): Fiber {
     const key = element.key;
     let child = currentFirstChild;
-    // 遍历处理
+    // 遍历处理：在旧节点中寻找可以复用的
     while (child !== null) {
       // TODO: If key === null and child.key === null, then this only applies to
       // the first item in the list.
@@ -936,6 +1045,7 @@ function createChildReconciler(
       child = child.sibling;
     }
 
+    // 遍历结束仍没有找到复用的节点，则删除所有的旧节点（while 循环已完成标记）并创建新节点、更新 return
     const created = createFiberFromElement(element, returnFiber.mode, lanes);
     coerceRef(returnFiber, currentFirstChild, created, element);
     created.return = returnFiber;

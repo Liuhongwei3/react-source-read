@@ -340,29 +340,12 @@ function createChildReconciler(
       );
     }
     if (current !== null) {
-      if (
-        current.elementType === elementType ||
-        // Keep this check inline so it only runs on the false path:
-        (__DEV__
-          ? isCompatibleFamilyForHotReloading(current, element)
-          : false) ||
-        // Lazy types should reconcile their resolved type.
-        // We need to do this after the Hot Reloading check above,
-        // because hot reloading has different semantics than prod because
-        // it doesn't resuspend. So we can't let the call below suspend.
-        (typeof elementType === 'object' &&
-          elementType !== null &&
-          elementType.$$typeof === REACT_LAZY_TYPE &&
-          resolveLazy(elementType) === current.type)
-      ) {
+      if (current.elementType === elementType) {
         // Move based on index
         const existing = useFiber(current, element.props);
         coerceRef(returnFiber, current, existing, element);
         existing.return = returnFiber;
-        if (__DEV__) {
-          existing._debugOwner = element._owner;
-          existing._debugInfo = debugInfo;
-        }
+
         return existing;
       }
     }
@@ -370,9 +353,7 @@ function createChildReconciler(
     const created = createFiberFromElement(element, returnFiber.mode, lanes);
     coerceRef(returnFiber, current, created, element);
     created.return = returnFiber;
-    if (__DEV__) {
-      created._debugInfo = debugInfo;
-    }
+
     return created;
   }
 
@@ -472,6 +453,9 @@ function createChildReconciler(
       // Text nodes don't have keys. If the previous node is implicitly keyed
       // we can continue to replace it without aborting even if it is not a text
       // node.
+      // 对于新的节点如果是 string 或者 number，那么都是没有 key 的，
+      // 所以如果老的节点有 key 的话，就不能复用，直接返回 null。
+      // 老的节点 key 为 null 的话，代表老的节点是文本节点，就可以复用
       if (key !== null) {
         return null;
       }
@@ -725,12 +709,14 @@ function createChildReconciler(
             // current, that means that we reused the fiber. We need to delete
             // it from the child list so that we don't add it to the deletion
             // list.
+            // 需要删除掉 map 中已经复用的节点
             existingChildren.delete(
               newFiber.key === null ? newIdx : newFiber.key,
             );
           }
         }
         lastPlacedIndex = placeChild(newFiber, lastPlacedIndex, newIdx);
+        // newFiber 拼装到新节点链表中 
         if (previousNewFiber === null) {
           resultingFirstChild = newFiber;
         } else {
@@ -815,6 +801,7 @@ function createChildReconciler(
         break;
       } else {
         // key 不相同时则直接不复用，删除节点
+        // 注意上面是使用 deleteRemainingChildren（deleteChild 的数组版），即该操作只删除当前遍历到的老节点
         deleteChild(returnFiber, child);
       }
       // 将 child 指向下一个相邻节点

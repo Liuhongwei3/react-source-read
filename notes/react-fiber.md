@@ -244,7 +244,7 @@ const compFiber = {
 
 > packages\react-reconciler\src\ReactInternalTypes.js
 
-```js
+```typescript
 // A Fiber is work on a Component that needs to be done or was done. There can
 // be more than one per component.
 export type Fiber = {
@@ -438,6 +438,12 @@ export function higherPriorityLane(a: Lane, b: Lane): Lane {
 
 ## react-diff
 
+### 整体策略
+
+ - 只进行统一层级的比较，如果跨层级的移动则视为创建和删除操作。
+ - 如果是不同类型的元素，则认为是创建了新的元素，而不会递归比较他们的孩子。
+ - 如果是列表元素等比较相似的内容，可以通过key来唯一确定是移动还是创建或删除操作。
+
 ### 流程
 
 ![](./excalDraw/react-diff-type-process.png)
@@ -475,12 +481,14 @@ function reconcileSingleTextNode(
 
 ### 单节点
 
-`reconcileSingleElement` 函数中，会遍历父 fiber 下所有的旧的子 fiber，寻找与新生成的 ReactElement 内容的 key 和 type 都相同的子 fiber。每次遍历对比的过程中：
+`reconcileSingleElement` 函数中，会遍历父 fiber 下所有的旧的子 fiber，寻找与新生成的 ReactElement 内容的 key 和 type 都相同的子 fiber
 
- - 若当前旧的子 fiber 与新内容 key 或 type 不一致，对当前旧的子 fiber 添加 `Deletion` 副作用标记（用于 dom 更新时删除），继续对比下一个旧子 fiber
- - 若当前旧的子 fiber 与新内容 key 或 type 一致，则判断为可复用，通过 `deleteRemainingChildren` 对该子 fiber 后面所有的兄弟 fiber 添加 `Deletion` 副作用标记，然后通过 useFiber 基于该子 fiber 和新内容的 props 生成新的 fiber 进行复用，结束遍历。
+每次遍历对比的过程中：
+ - 若当前旧的子 fiber 与新内容 key 不相同，仅对当前旧的子 fiber 添加 `Deletion` 副作用标记（用于 dom 更新时删除），继续对比下一个旧子 fiber
+ - 若当前旧的子 fiber 与新内容 key 相同但 type 不相同，说明节点内容已变化，不能复用，则对当前旧的子 fiber 添加 `Deletion` 副作用标记，包括其后面所有的兄弟节点并跳出循环
+ - 若当前旧的子 fiber 与新内容 key、type 相同，则判断为可复用，通过 `deleteRemainingChildren` 对该子 fiber 后面所有的兄弟 fiber 添加 `Deletion` 副作用标记，然后通过 useFiber 基于该子 fiber 和新内容的 props 生成新的 fiber 进行复用，结束遍历
 
-如果遍历完仍没找到复用节点，此时父 fiber 下的所有旧的子 fiber 都已经添加了 `Deletion` 副作用标记，通过 `createFiberFromElement` 基于新内容创建新的 fiber 并将其 `return` 指向父 fiber。
+如果遍历完仍没找到复用节点，此时父 fiber 下的所有旧的子 fiber 都已经添加了 `Deletion` 副作用标记，通过 `createFiberFromElement` 基于新内容创建新的 fiber 并将其 `return` 指向父 fiber
 
 ```js
 /**
@@ -525,6 +533,7 @@ function reconcileSingleTextNode(
         break;
       } else {
         // key 不相同时则直接不复用，删除节点
+        // 注意上面是使用 deleteRemainingChildren（deleteChild 的数组版），即该操作只删除当前遍历到的老节点
         deleteChild(returnFiber, child);
       }
       // 将 child 指向下一个相邻节点
@@ -541,11 +550,184 @@ function reconcileSingleTextNode(
 
 ### 多节点
 
-```js
+多节点要比上面两个复杂，却又常见，也需要重点关注一下，其中主要涉及到三个 for 循环：
 
+#### 第一轮
+
+遍历新旧节点，尝试复用旧的节点，更新相关值
+
+1. 将 `oldFiber` 与  `newChildren[newIdx]` 通过 `updateSlot` 进行对比，对比细节和上面的文本和单节点一样，取决于 `newChildren[newIdx]` 节点的类型，**复用失败则跳出本轮循环**
+2. 复用后的节点为 `newFiber`，再通过 `placeChild` 方法判断是否需要给其打上 `Placement` 标记，标识需要移动
+3. 继续遍历，直到旧节点或新节点已遍历完，则**跳出本轮循环**
+
+```js
+let resultingFirstChild: Fiber | null = null;
+let previousNewFiber: Fiber | null = null;
+
+let oldFiber = currentFirstChild;
+let lastPlacedIndex = 0;
+let newIdx = 0;
+let nextOldFiber = null;
+// 第一轮循环
+// 遍历新旧节点，尝试复用旧的节点，更新相关值
+for (; oldFiber !== null && newIdx < newChildren.length; newIdx++) {
+  if (oldFiber.index > newIdx) {
+    nextOldFiber = oldFiber;
+    oldFiber = null;
+  } else {
+    // 暂存旧的下一个节点
+    nextOldFiber = oldFiber.sibling;
+  }
+  // 尝试复用旧的节点
+  const newFiber = updateSlot(
+    returnFiber,
+    oldFiber,
+    newChildren[newIdx],
+    lanes,
+    debugInfo,
+  );
+  // 如果尝试复用的节点都为 null，直接 break
+  if (newFiber === null) {
+    // TODO: This breaks on empty slots like null children. That's
+    // unfortunate because it triggers the slow path all the time. We need
+    // a better way to communicate whether this was a miss or null,
+    // boolean, undefined, etc.
+    if (oldFiber === null) {
+      oldFiber = nextOldFiber;
+    }
+    break;
+  }
+  if (shouldTrackSideEffects) {
+    // 如果旧的 fiber 存在且尝试复用的新的 fiber 又没有对应的 
+    // alternate(暂时理解为没有真实 DOM)，就直接删除掉旧的 fiber
+    if (oldFiber && newFiber.alternate === null) {
+      // We matched the slot, but we didn't reuse the existing fiber, so we
+      // need to delete the existing child.
+      deleteChild(returnFiber, oldFiber);
+    }
+  }
+  // 更新新的节点的位置 index，即最新的不需要移动的节点原来的 index
+  lastPlacedIndex = placeChild(newFiber, lastPlacedIndex, newIdx);
+  if (previousNewFiber === null) {
+    // TODO: Move out of the loop. This only happens for the first run.
+    resultingFirstChild = newFiber;
+  } else {
+    // TODO: Defer siblings if we're not at the right index for this slot.
+    // I.e. if we had null values before, then we want to defer this
+    // for each null value. However, we also don't want to call updateSlot
+    // with the previous one.
+    previousNewFiber.sibling = newFiber;
+  }
+  previousNewFiber = newFiber;
+  oldFiber = nextOldFiber;
+}
 ```
 
+### 第一轮结束
+
+此时如果新节点已经遍历结束，那么就需要删掉旧的剩下的节点
+
+```js
+if (newIdx === newChildren.length) {
+  // 新的节点列表遍历结束后，需要删除剩下的老节点
+  // A B C D E --> B A C --> delete D E 节点
+  // We've reached the end of the new children. We can delete the rest.
+  deleteRemainingChildren(returnFiber, oldFiber);
+  return resultingFirstChild;
+}
+```
+
+### 第二轮
+
+此时如果原来的节点遍历结束，新节点还有未遍历的，说明剩余的就全是需要新增的：通过 `createChild` 直接创建新节点并打上 `Placement` 标记，标识需要插入，直到新节点遍历完，第二轮遍历也就结束
+
+```js
+// 如果原来的节点处理完
+if (oldFiber === null) {
+  // 处理剩余的新节点列表中未处理的元素，即插入新节点
+  // A B C --> A B C D E --> 循环处理 D E 节点
+  // If we don't have any more existing children we can choose a fast path
+  // since the rest will all be insertions.
+  for (; newIdx < newChildren.length; newIdx++) {
+    const newFiber = createChild(
+      returnFiber,
+      newChildren[newIdx],
+      lanes,
+      debugInfo,
+    );
+    if (newFiber === null) {
+      continue;
+    }
+    // 更新 flags
+    lastPlacedIndex = placeChild(newFiber, lastPlacedIndex, newIdx);
+    if (previousNewFiber === null) {
+      // TODO: Move out of the loop. This only happens for the first run.
+      resultingFirstChild = newFiber;
+    } else {
+      previousNewFiber.sibling = newFiber;
+    }
+    previousNewFiber = newFiber;
+  }
+  return resultingFirstChild;
+}
+```
+
+### 第三轮（移动）
+
+1. 此时为新旧节点都未遍历完，先将剩下的旧节点存起来，然后遍历剩下的新节点
+2. 然后通过 `updateFromMap` 根据旧节点的 map 进行复用，此部分逻辑和单节点依然一样，有复用就复用，否则新建
+3. 新节点遍历完如果 `existingChildren` 还有节点，则删除即可，打上 `Deletion` 标记
+
+```js
+// Add all children to a key map for quick lookups.
+const existingChildren = mapRemainingChildren(oldFiber);
+
+// Keep scanning and use the map to restore deleted items as moves.
+for (; newIdx < newChildren.length; newIdx++) {
+  const newFiber = updateFromMap(
+    existingChildren,
+    returnFiber,
+    newIdx,
+    newChildren[newIdx],
+    lanes,
+    debugInfo,
+  );
+  if (newFiber !== null) {
+    if (shouldTrackSideEffects) {
+      if (newFiber.alternate !== null) {
+        // The new fiber is a work in progress, but if there exists a
+        // current, that means that we reused the fiber. We need to delete
+        // it from the child list so that we don't add it to the deletion
+        // list.
+        // 需要删除掉 map 中已经复用的节点
+        existingChildren.delete(
+          newFiber.key === null ? newIdx : newFiber.key,
+        );
+      }
+    }
+    lastPlacedIndex = placeChild(newFiber, lastPlacedIndex, newIdx);
+    // newFiber 拼装到新节点链表中 
+    if (previousNewFiber === null) {
+      resultingFirstChild = newFiber;
+    } else {
+      previousNewFiber.sibling = newFiber;
+    }
+    previousNewFiber = newFiber;
+  }
+}
+
+if (shouldTrackSideEffects) {
+  // Any existing children that weren't consumed above were deleted. We need
+  // to add them to the deletion list.
+  existingChildren.forEach(child => deleteChild(returnFiber, child));
+}
+```
+
+那么针对打好标记后的节点，后续如何准确的更新呢？
+
 ## 所有核心源码
+
+> 并非所有注释都有，后期部分内容已修改，以仓库中对应源文件 copy 结尾的文件为准
 
 ```js
 // This wrapper function exists because I expect to clone the code in each path
@@ -1145,3 +1327,8 @@ export const reconcileChildFibers: ChildReconciler =
   createChildReconciler(true);
 export const mountChildFibers: ChildReconciler = createChildReconciler(false);
 ```
+
+## 快捷键
+
+- 展开所有折叠代码：ctrl + k, ctrl + j
+- 折叠所有展开代码：ctrl + k, ctrl + 0
